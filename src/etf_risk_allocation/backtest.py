@@ -108,6 +108,130 @@ def backtest_monthly_rebalanced(
     ).set_index("Date")
 
 
+def backtest_dynamic_weights(
+    returns: pd.DataFrame,
+    target_weights: pd.DataFrame,
+    initial_capital: float = 10_000.0,
+    cost_rate: float = 0.001
+) -> pd.DataFrame:
+    """
+    Backtest mit dynamischen Zielgewichten.
+
+    - Tägliche Portfoliorenditen
+    - Monatliches Rebalancing
+    - Gewichtungsdrift zwischen Rebalancings
+    - Transaktionskosten
+    """
+
+    # 1. Daten vorbereiten
+    returns = returns.sort_index()
+    target_weights = target_weights.sort_index()
+
+    assets = list(target_weights.columns)
+    returns = returns[assets]
+
+    if not returns.index.equals(target_weights.index):
+        raise ValueError("Indizes stimmen nicht überein.")
+
+    if returns.isna().any().any():
+        raise ValueError("Fehlende Renditen vorhanden.")
+
+    if (
+        target_weights.isna().any().any()
+        or (target_weights < 0).any().any()
+    ):
+        raise ValueError("Ungültige Zielgewichte.")
+
+    if not (
+        (target_weights.sum(axis=1) - 1).abs() < 1e-8
+    ).all():
+        raise ValueError("Gewichte müssen sich zu 1 summieren.")
+
+    if initial_capital <= 0 or cost_rate < 0:
+        raise ValueError("Ungültige Backtest-Parameter.")
+
+    # 2. Portfolio initialisieren
+    capital = float(initial_capital)
+    weights = target_weights.iloc[0].copy()
+
+    dates = returns.index
+    records = []
+
+    # 3. Täglichen Backtest durchführen
+    for i, date in enumerate(dates):
+
+        capital_before = capital
+        asset_returns = returns.loc[date]
+
+        # Brutto-Portfoliorendite
+        gross_return = float(
+            (weights * asset_returns).sum()
+        )
+
+        # Portfolioentwicklung
+        capital = capital_before * (1 + gross_return)
+
+        # Gewichtungsdrift durch Kursveränderungen
+        drifted_weights = (
+            weights * (1 + asset_returns)
+            / (1 + gross_return)
+        )
+
+        # 4. Monatsende erkennen
+        rebalance = (
+            i < len(dates) - 1
+            and date.to_period("M")
+            != dates[i + 1].to_period("M")
+        )
+
+        turnover = 0.0
+        trading_cost = 0.0
+
+        # 5. Monatliches Rebalancing
+        if rebalance:
+
+            target = target_weights.loc[date]
+
+            # Gehandeltes Volumen
+            turnover = float(
+                (target - drifted_weights).abs().sum()
+            )
+
+            # Transaktionskosten
+            trading_cost = capital * turnover * cost_rate
+
+            capital -= trading_cost
+
+            # Neue Zielgewichte übernehmen
+            weights = target.copy()
+
+        else:
+            weights = drifted_weights
+
+        # 6. Nettorendite
+        net_return = capital / capital_before - 1
+
+        # 7. Ergebnisse speichern
+        row = {
+            "Date": date,
+            "gross_return": gross_return,
+            "net_return": net_return,
+            "portfolio_value": capital,
+            "rebalanced": rebalance,
+            "turnover": turnover,
+            "trading_cost_eur": trading_cost
+        }
+
+        for asset in assets:
+            row[f"{asset.lower()}_weight"] = float(
+                weights[asset]
+            )
+
+        records.append(row)
+
+    return pd.DataFrame(records).set_index("Date")
+
+
 def main():
     project_root = Path(__file__).resolve().parents[2]
     data_dir = project_root / "data" / "processed"
