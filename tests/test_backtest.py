@@ -242,3 +242,198 @@ def test_positive_portfolio_value():
     assert np.isfinite(
         result["portfolio_value"]
     ).all()
+
+
+def test_exact_transaction_costs():
+    """
+    Prüft exakte Handelskosten.
+
+    Start: 10.000 EUR
+    Gewichte: 60 % Equity, 40 % Bonds
+    Equity-Rendite: +10 %
+
+    Erwartetes Handelsvolumen: 480 EUR
+    Erwartete Kosten: 0.48 EUR
+    Endvermögen: 10.599,52 EUR
+    """
+
+    dates = pd.to_datetime([
+        "2025-01-30",
+        "2025-01-31",
+        "2025-02-03",
+    ])
+
+    returns = pd.DataFrame(
+        0.0,
+        index=dates,
+        columns=ASSETS,
+    )
+
+    returns.loc[
+        "2025-01-31", "Equity"
+    ] = 0.10
+
+    weights = pd.DataFrame(
+        {
+            "Equity": 0.6,
+            "Bonds": 0.4,
+            "Gold": 0.0,
+        },
+        index=dates,
+    )
+
+    result = run_engine(
+        returns,
+        weights,
+        cost_rate=0.001,
+    )
+
+    rebalance_date = pd.Timestamp(
+        "2025-01-31"
+    )
+
+    # Erwartetes Vermögen vor Rebalancing
+    wealth_before = 10_600.0
+
+    # 240 EUR Verkauf + 240 EUR Kauf
+    expected_volume = 480.0
+
+    # Handelskosten von 0.1 %
+    expected_cost = 0.48
+
+    expected_wealth = 10_599.52
+
+    # Rebalancing findet statt
+    assert result.loc[
+        rebalance_date, "rebalanced"
+    ]
+
+    # Exakten Turnover prüfen
+    assert result.loc[
+        rebalance_date, "turnover"
+    ] == pytest.approx(
+        expected_volume / wealth_before
+    )
+
+    # Exakte Gebühren prüfen
+    assert result.loc[
+        rebalance_date, "trading_cost_eur"
+    ] == pytest.approx(expected_cost)
+
+    # Gesamtkosten prüfen
+    assert result[
+        "trading_cost_eur"
+    ].sum() == pytest.approx(
+        expected_cost
+    )
+
+    # Portfoliowert nach Kosten
+    assert result.loc[
+        rebalance_date, "portfolio_value"
+    ] == pytest.approx(
+        expected_wealth
+    )
+
+
+def test_exact_rebalancing():
+    """
+    Prüft die exakte Neugewichtung
+    und deren Wirkung am Folgetag.
+
+    Start: 10.000 EUR
+    Equity/Bonds: 50/50
+
+    31.01.: Equity +20 %
+    Rebalancing auf 50/50
+
+    03.02.: Equity -10 %, Bonds +4 %
+
+    Erwartetes Endvermögen: 10.670 EUR
+    """
+
+    dates = pd.to_datetime([
+        "2025-01-30",
+        "2025-01-31",
+        "2025-02-03",
+    ])
+
+    returns = pd.DataFrame(
+        0.0,
+        index=dates,
+        columns=ASSETS,
+    )
+
+    returns.loc[
+        "2025-01-31", "Equity"
+    ] = 0.20
+
+    returns.loc[
+        "2025-02-03", "Equity"
+    ] = -0.10
+
+    returns.loc[
+        "2025-02-03", "Bonds"
+    ] = 0.04
+
+    weights = pd.DataFrame(
+        {
+            "Equity": 0.5,
+            "Bonds": 0.5,
+            "Gold": 0.0,
+        },
+        index=dates,
+    )
+
+    # Ohne Gebühren, um die reine
+    # Rebalancing-Wirkung zu isolieren.
+    result = run_engine(
+        returns,
+        weights,
+        cost_rate=0.0,
+    )
+
+    rebalance_date = pd.Timestamp(
+        "2025-01-31"
+    )
+
+    next_date = pd.Timestamp(
+        "2025-02-03"
+    )
+
+    # 31.01.: 5.000 * 1.20 + 5.000
+    assert result.loc[
+        rebalance_date, "portfolio_value"
+    ] == pytest.approx(11_000.0)
+
+    # 500 EUR Verkauf + 500 EUR Kauf
+    assert result.loc[
+        rebalance_date, "turnover"
+    ] == pytest.approx(
+        1_000 / 11_000
+    )
+
+    # Rebalancing auf 50/50
+    assert result.loc[
+        rebalance_date, "equity_weight"
+    ] == pytest.approx(0.5)
+
+    assert result.loc[
+        rebalance_date, "bonds_weight"
+    ] == pytest.approx(0.5)
+
+    # Rebalancing darf die Rendite
+    # desselben Tages nicht verändern.
+    assert result.loc[
+        rebalance_date, "gross_return"
+    ] == pytest.approx(0.10)
+
+    # Folgetag nutzt neue Gewichte:
+    # 0.5 * (-0.10) + 0.5 * 0.04 = -0.03
+    assert result.loc[
+        next_date, "gross_return"
+    ] == pytest.approx(-0.03)
+
+    # 11.000 * 0.97 = 10.670 EUR
+    assert result.loc[
+        next_date, "portfolio_value"
+    ] == pytest.approx(10_670.0)
