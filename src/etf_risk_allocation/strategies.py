@@ -170,3 +170,24 @@ def minimum_variance_weights(
     )
 
     return weights
+
+
+def equal_weight_weights() -> pd.Series:
+    """
+    Gleichgewichtete Drei-Asset-Strategie.
+
+    Equity: 1/3
+    Bonds:  1/3
+    Gold:   1/3
+
+    Long-only und vollständig investiert.
+    """
+    assets = ["Equity", "Bonds", "Gold"]
+
+    return pd.Series(
+        1.0 / len(assets),
+        index=assets,
+        dtype=float,
+        name="equal_weight",
+    )
+
